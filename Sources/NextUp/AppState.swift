@@ -254,14 +254,14 @@ extension AppState {
         state.calendarAccess = .granted
         state.meetings = [
             meeting("Sprint planning", in: 12, for: 45, .systemBlue, link: meet),
-            meeting("1:1 with Justin", in: 90, for: 30, .systemPurple, link: meet),
-            meeting("Design review: eligibility sync", in: 180, for: 60, .systemGreen, link: nil),
+            meeting("1:1 with Alex", in: 90, for: 30, .systemPurple, link: meet),
+            meeting("Design review", in: 180, for: 60, .systemGreen, link: nil),
             meeting("Daily standup", in: 22 * 60, for: 15, .systemBlue, link: meet),
         ]
         state.slackStatus = .ok
         state.slackItems = [
-            SlackItem(id: 1, date: now.addingTimeInterval(-2 * minute), title: "Russell Park", subtitle: "", body: "Can you take a look at the ADP webhook retries before standup? Seeing a few 504s in prod.", link: nil),
-            SlackItem(id: 2, date: now.addingTimeInterval(-9 * minute), title: "#foh-oncall", subtitle: "Justin Lee", body: "@amer the EOM run finished, numbers look good", link: nil),
+            SlackItem(id: 1, date: now.addingTimeInterval(-2 * minute), title: "Alex Rivera", subtitle: "", body: "Can you look over the release notes before standup? Want to send them out this morning.", link: nil),
+            SlackItem(id: 2, date: now.addingTimeInterval(-9 * minute), title: "#team-updates", subtitle: "Sam Taylor", body: "The deploy finished, everything looks good", link: nil),
             SlackItem(id: 3, date: now.addingTimeInterval(-3 * 3600), title: "Maya Chen", subtitle: "", body: "Thanks! Merged.", link: nil),
         ]
         state.unseenCount = 2

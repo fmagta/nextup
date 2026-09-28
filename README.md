@@ -4,7 +4,7 @@ A menu bar app that shows your Slack notifications and your next meeting in one 
 
 - **Menu bar:** a bell with the count of Slack notifications you haven't looked at yet. When a meeting is less than an hour away, its name and a countdown appear next to the bell (`2 · Sprint planning 12m`). The countdown turns orange at 15 minutes and red at 5.
 - **Popover:** click the bell. It shows the next meeting (with a **Join** button for Meet, Zoom, Teams, or Webex links), the rest of today and tomorrow, and the last 24 hours of Slack notifications. New ones have a blue dot.
-- **Click to go:** a Slack row opens Slack. A meeting opens the call in its desktop app when one is installed (Zoom, Teams), otherwise in the browser. Meetings without a link open in Calendar. Right-click a meeting to copy its link or show it in Calendar.
+- **Click to go:** a Slack row brings Slack to the front. It can't jump to the exact channel, because Slack's Mac notifications carry only the workspace ID and message timestamp, not the channel. A meeting opens the call in its desktop app when one is installed (Zoom, Teams), otherwise in the browser. Meetings without a link open in Calendar. Right-click a meeting to copy its link or show it in Calendar.
 - **Reminder:** one minute before each meeting you get a banner with a **Join** button. Banners show over full-screen apps.
 
 ## How it gets the data
