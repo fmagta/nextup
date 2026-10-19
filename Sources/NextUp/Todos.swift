@@ -38,7 +38,7 @@ enum TodoError: LocalizedError {
 final class TodoStore {
     static let listName = "NextUp"
 
-    private let store = EKEventStore()
+    private var store = EKEventStore()
     private let defaults = UserDefaults.standard
 
     var access: CalendarAccess {
@@ -50,7 +50,10 @@ final class TodoStore {
     }
 
     func requestAccess() async -> Bool {
-        (try? await store.requestFullAccessToReminders()) ?? false
+        let granted = (try? await store.requestFullAccessToReminders()) ?? false
+        // A store made before the grant sees no accounts, so it can't find or create the list until replaced.
+        if granted { store = EKEventStore() }
+        return granted
     }
 
     /// Open todos: dated ones soonest first, then undated ones oldest first.
