@@ -28,5 +28,9 @@
 	<string>NextUp shows your upcoming meetings in the menu bar and reminds you before they start.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>NextUp shows your upcoming meetings in the menu bar and reminds you before they start.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>NextUp shows the todos in your NextUp Reminders list and lets you add and complete them.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>NextUp shows the todos in your NextUp Reminders list and lets you add and complete them.</string>
 </dict>
 </plist>

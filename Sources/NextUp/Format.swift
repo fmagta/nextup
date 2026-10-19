@@ -28,6 +28,16 @@ enum Format {
         return rest == 0 ? "In \(hours) h" : "In \(hours) h \(rest) min"
     }
 
+    /// A time for todos due today, "Yesterday" or "Tomorrow" next to it, otherwise a short date.
+    static func due(_ todo: Todo, now: Date) -> String {
+        guard let due = todo.due else { return "" }
+        let calendar = Calendar.current
+        if calendar.isDate(due, inSameDayAs: now) { return todo.dueHasTime ? time.string(from: due) : "Today" }
+        if calendar.isDateInYesterday(due) { return "Yesterday" }
+        if calendar.isDateInTomorrow(due) { return "Tomorrow" }
+        return due.formatted(.dateTime.month(.abbreviated).day())
+    }
+
     static func ago(_ date: Date, now: Date) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
         switch seconds {

@@ -19,12 +19,19 @@ final class AppState: ObservableObject {
     @Published private(set) var unseenCount = 0
     /// Items newer than this get the "new" dot while the popover is open.
     @Published private(set) var highlightSince = Date.distantFuture
+    @Published private(set) var todos: [Todo] = []
+    @Published private(set) var todoAccess: CalendarAccess
+    @Published private(set) var todoError: String?
+    /// Todos just marked done, kept for a few seconds so the popover can offer Undo.
+    @Published private(set) var recentlyCompleted: [Todo] = []
     @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var closePopover: () -> Void = {}
 
     private let calendar = CalendarStore()
     private let reminders = MeetingReminders()
+    private let todoStore = TodoStore()
+    private var undoExpiry: Task<Void, Never>?
     private var fetchedSlack: [SlackItem] = []
     private var storeModified: Date?
     private var popoverOpen = false
@@ -48,6 +55,7 @@ final class AppState: ObservableObject {
 
     init() {
         calendarAccess = calendar.access
+        todoAccess = todoStore.access
         // First launch: count only what arrives from now on, not the last day of history.
         if defaults.object(forKey: "lastSeen") == nil { lastSeen = Date() }
     }
@@ -56,14 +64,23 @@ final class AppState: ObservableObject {
         reminders.activate()
         repeatEvery(5) { $0.pollSlack() }
         repeatEvery(15) { $0.tick() }
-        repeatEvery(300) { $0.reloadCalendar() }
-        observe(.EKEventStoreChanged, on: .default) { $0.reloadCalendar() }
+        repeatEvery(300) {
+            $0.reloadCalendar()
+            $0.reloadTodos()
+        }
+        observe(.EKEventStoreChanged, on: .default) {
+            $0.reloadCalendar()
+            $0.reloadTodos()
+        }
         observe(NSWorkspace.didWakeNotification, on: NSWorkspace.shared.notificationCenter) {
             $0.tick()
             $0.reloadCalendar()
+            $0.reloadTodos()
         }
         pollSlack(force: true)
         if calendarAccess == .notDetermined { requestCalendarAccess() } else { reloadCalendar() }
+        // Reminders access is asked from the popover, so it doesn't stack on the calendar prompt at launch.
+        reloadTodos()
     }
 
     // MARK: Derived state
@@ -132,6 +149,23 @@ final class AppState: ObservableObject {
         reminders.schedule(meetings, now: now)
     }
 
+    func reloadTodos() {
+        todoAccess = todoStore.access
+        guard todoAccess == .granted else {
+            todos = []
+            return
+        }
+        Task {
+            do {
+                let fetched = try await todoStore.todos()
+                if fetched != todos { todos = fetched }
+                todoError = nil
+            } catch {
+                todoError = error.localizedDescription
+            }
+        }
+    }
+
     // MARK: Actions
 
     func popoverWillShow() {
@@ -139,6 +173,7 @@ final class AppState: ObservableObject {
         popoverOpen = true
         tick()
         pollSlack(force: true)
+        reloadTodos()
     }
 
     func popoverDidClose() {
@@ -173,6 +208,68 @@ final class AppState: ObservableObject {
     func showInCalendar(_ meeting: Meeting) {
         closePopover()
         if let url = meeting.calendarURL { NSWorkspace.shared.open(url) }
+    }
+
+    func complete(_ items: [Todo]) {
+        guard !items.isEmpty else { return }
+        do {
+            try todoStore.setCompleted(items.map(\.id), true)
+        } catch {
+            todoError = error.localizedDescription
+            return
+        }
+        let ids = Set(items.map(\.id))
+        todos.removeAll { ids.contains($0.id) }
+        recentlyCompleted = items
+        undoExpiry?.cancel()
+        undoExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            if !Task.isCancelled { self?.recentlyCompleted = [] }
+        }
+        reloadTodos()
+    }
+
+    func completeAllTodos() {
+        complete(todos)
+    }
+
+    func undoComplete() {
+        undoExpiry?.cancel()
+        let items = recentlyCompleted
+        recentlyCompleted = []
+        do {
+            try todoStore.setCompleted(items.map(\.id), false)
+        } catch {
+            todoError = error.localizedDescription
+        }
+        reloadTodos()
+    }
+
+    func addTodo(_ title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        do {
+            try todoStore.add(title)
+        } catch {
+            todoError = error.localizedDescription
+        }
+        reloadTodos()
+    }
+
+    func openReminders() {
+        closePopover()
+        TodoStore.openRemindersApp()
+    }
+
+    func requestTodoAccess() {
+        if todoAccess == .denied {
+            openPrivacySettings("Privacy_Reminders")
+            return
+        }
+        Task {
+            _ = await todoStore.requestAccess()
+            reloadTodos()
+        }
     }
 
     func requestCalendarAccess() {
@@ -257,6 +354,12 @@ extension AppState {
             meeting("1:1 with Alex", in: 90, for: 30, .systemPurple, link: meet),
             meeting("Design review", in: 180, for: 60, .systemGreen, link: nil),
             meeting("Daily standup", in: 22 * 60, for: 15, .systemBlue, link: meet),
+        ]
+        state.todoAccess = .granted
+        state.todos = [
+            Todo(id: "t1", title: "Send the release notes", due: now.addingTimeInterval(-26 * 3600), dueHasTime: false),
+            Todo(id: "t2", title: "Review the onboarding PR", due: now.addingTimeInterval(3 * 3600), dueHasTime: true),
+            Todo(id: "t3", title: "Book flights for the offsite", due: nil, dueHasTime: false),
         ]
         state.slackStatus = .ok
         state.slackItems = [

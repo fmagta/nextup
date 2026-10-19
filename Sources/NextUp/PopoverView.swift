@@ -7,6 +7,8 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             MeetingsSection(state: state)
             Divider()
+            TodosSection(state: state)
+            Divider()
             SlackSection(state: state)
             Divider()
             Footer(state: state)
@@ -166,6 +168,143 @@ private struct DayLabel: View {
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 2)
+    }
+}
+
+// MARK: Todos
+
+private struct TodosSection: View {
+    @ObservedObject var state: AppState
+    @State private var draft = ""
+    /// Past this many rows the rest are behind a link to Reminders, so the popover keeps its height.
+    private let limit = 8
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "To do", detail: overdueCount > 0 ? "\(overdueCount) overdue" : nil) {
+                if state.todoAccess == .granted && !state.todos.isEmpty {
+                    Button("Mark all done") { withAnimation { state.completeAllTodos() } }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11))
+                }
+            }
+            switch state.todoAccess {
+            case .granted:
+                if let error = state.todoError {
+                    EmptyRow(symbol: "exclamationmark.triangle", text: "Can't reach Reminders: \(error)")
+                }
+                ForEach(state.todos.prefix(limit)) { todo in
+                    TodoRow(todo: todo, now: state.now, state: state)
+                }
+                if state.todos.count > limit {
+                    Button("\(state.todos.count - limit) more in Reminders") { state.openReminders() }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                }
+                if !state.recentlyCompleted.isEmpty {
+                    UndoRow(count: state.recentlyCompleted.count) { withAnimation { state.undoComplete() } }
+                }
+                HStack(spacing: 8) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                    TextField("Add a todo", text: $draft)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .onSubmit {
+                            state.addTodo(draft)
+                            draft = ""
+                        }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 10)
+            case .notDetermined, .denied:
+                PermissionRow(
+                    symbol: "checklist",
+                    message: "Allow Reminders access to see your todos.",
+                    detail: state.todoAccess == .denied
+                        ? "Turn on NextUp in Privacy & Security › Reminders."
+                        : "NextUp keeps them in a \(TodoStore.listName) list in Reminders, so they sync to your phone."
+                ) {
+                    Button(state.todoAccess == .denied ? "Open Settings" : "Allow") { state.requestTodoAccess() }
+                }
+            }
+        }
+    }
+
+    private var overdueCount: Int {
+        state.todos.filter { $0.isOverdue(at: state.now) }.count
+    }
+}
+
+private struct TodoRow: View {
+    let todo: Todo
+    let now: Date
+    let state: AppState
+    @State private var hovering = false
+    @State private var checked = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                checked = true
+                // Let the tick show before the row leaves.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    withAnimation { state.complete([todo]) }
+                }
+            } label: {
+                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(checked ? Color.accentColor : Color.secondary)
+                    .frame(width: 16)
+            }
+            .buttonStyle(.plain)
+            .help("Mark done")
+            Text(todo.title)
+                .font(.system(size: 13))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if todo.due != nil {
+                Text(Format.due(todo, now: now))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(todo.isOverdue(at: now) ? Color.red : Color.secondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? Color.primary.opacity(0.07) : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { state.openReminders() }
+        .contextMenu {
+            Button("Mark Done") { state.complete([todo]) }
+            Button("Open Reminders") { state.openReminders() }
+        }
+        .help("Open in Reminders")
+        .padding(.horizontal, 6)
+    }
+}
+
+private struct UndoRow: View {
+    let count: Int
+    let undo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(count == 1 ? "Marked done" : "\(count) marked done", systemImage: "checkmark.circle")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Undo", action: undo)
+                .buttonStyle(.borderless)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
     }
 }
 

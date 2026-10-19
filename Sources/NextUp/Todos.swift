@@ -1,0 +1,121 @@
+import AppKit
+import EventKit
+
+struct Todo: Identifiable, Hashable {
+    let id: String
+    let title: String
+    /// Nil for reminders without a due date.
+    let due: Date?
+    /// False for all-day due dates, so the row says "Today" rather than midnight.
+    let dueHasTime: Bool
+
+    func isOverdue(at now: Date) -> Bool {
+        guard let due else { return false }
+        return dueHasTime ? due < now : due < Calendar.current.startOfDay(for: now)
+    }
+}
+
+extension Todo {
+    init(reminder: EKReminder) {
+        let components = reminder.dueDateComponents
+        self.init(
+            id: reminder.calendarItemIdentifier,
+            title: (reminder.title ?? "").isEmpty ? "Untitled" : reminder.title,
+            due: components.flatMap { Calendar.current.date(from: $0) },
+            dueHasTime: components?.hour != nil
+        )
+    }
+}
+
+enum TodoError: LocalizedError {
+    case noAccount
+
+    var errorDescription: String? { "no Reminders account to hold the \(TodoStore.listName) list" }
+}
+
+/// Reads and writes a "NextUp" list in Reminders. It lives in the same account as the default
+/// list (usually iCloud), so todos also show up on iPhone and through Siri.
+final class TodoStore {
+    static let listName = "NextUp"
+
+    private let store = EKEventStore()
+    private let defaults = UserDefaults.standard
+
+    var access: CalendarAccess {
+        switch EKEventStore.authorizationStatus(for: .reminder) {
+        case .fullAccess: return .granted
+        case .notDetermined: return .notDetermined
+        default: return .denied
+        }
+    }
+
+    func requestAccess() async -> Bool {
+        (try? await store.requestFullAccessToReminders()) ?? false
+    }
+
+    /// Open todos: dated ones soonest first, then undated ones oldest first.
+    func todos() async throws -> [Todo] {
+        let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: [try list()])
+        return await withCheckedContinuation { continuation in
+            store.fetchReminders(matching: predicate) { reminders in
+                let sorted = (reminders ?? []).sorted(by: Self.order)
+                continuation.resume(returning: sorted.map(Todo.init(reminder:)))
+            }
+        }
+    }
+
+    func add(_ title: String) throws {
+        let reminder = EKReminder(eventStore: store)
+        reminder.title = title
+        reminder.calendar = try list()
+        try store.save(reminder, commit: true)
+    }
+
+    /// Saves every change in one commit, so "mark all done" and its undo are a single write.
+    func setCompleted(_ ids: [String], _ completed: Bool) throws {
+        do {
+            for id in ids {
+                guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { continue }
+                reminder.isCompleted = completed
+                try store.save(reminder, commit: false)
+            }
+            try store.commit()
+        } catch {
+            store.reset()
+            throw error
+        }
+    }
+
+    static func openRemindersApp() {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.reminders") else { return }
+        NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// The NextUp list, created on first use. Remembered by identifier so renaming it in Reminders keeps it linked.
+    private func list() throws -> EKCalendar {
+        if let id = defaults.string(forKey: "todoListID"), let list = store.calendar(withIdentifier: id) { return list }
+        if let list = store.calendars(for: .reminder).first(where: { $0.title == Self.listName }) {
+            defaults.set(list.calendarIdentifier, forKey: "todoListID")
+            return list
+        }
+        guard let source = store.defaultCalendarForNewReminders()?.source
+                ?? store.sources.first(where: { $0.sourceType == .local }) else { throw TodoError.noAccount }
+        let list = EKCalendar(for: .reminder, eventStore: store)
+        list.title = Self.listName
+        list.cgColor = NSColor.systemIndigo.cgColor
+        list.source = source
+        try store.saveCalendar(list, commit: true)
+        defaults.set(list.calendarIdentifier, forKey: "todoListID")
+        return list
+    }
+
+    private static func order(_ a: EKReminder, _ b: EKReminder) -> Bool {
+        let calendar = Calendar.current
+        switch (a.dueDateComponents.flatMap(calendar.date(from:)), b.dueDateComponents.flatMap(calendar.date(from:))) {
+        case let (x?, y?): return x < y
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return (a.creationDate ?? .distantPast) < (b.creationDate ?? .distantPast)
+        }
+    }
+}
