@@ -8,6 +8,8 @@ struct Todo: Identifiable, Hashable {
     let due: Date?
     /// False for all-day due dates, so the row says "Today" rather than midnight.
     let dueHasTime: Bool
+    /// Where the todo came from, such as the Slack message it was made from.
+    var url: URL? = nil
 
     func isOverdue(at now: Date) -> Bool {
         guard let due else { return false }
@@ -22,7 +24,8 @@ extension Todo {
             id: reminder.calendarItemIdentifier,
             title: (reminder.title ?? "").isEmpty ? "Untitled" : reminder.title,
             due: components.flatMap { Calendar.current.date(from: $0) },
-            dueHasTime: components?.hour != nil
+            dueHasTime: components?.hour != nil,
+            url: reminder.url
         )
     }
 }
@@ -31,6 +34,57 @@ enum TodoError: LocalizedError {
     case noAccount
 
     var errorDescription: String? { "no Reminders account to hold the \(TodoStore.listName) list" }
+}
+
+/// Reads phrases like "tomorrow", "friday 3pm", or "oct 25" into a due date. A phrase without
+/// a time gives an all-day due date, the way Reminders shows "Today" rather than noon.
+enum DuePhrase {
+    private static let detector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+
+    static func parse(_ text: String) -> DateComponents? {
+        guard let match = detector.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let date = match.date else { return nil }
+        // timeIsSignificant isn't public API, so check it exists and assume a time when it doesn't.
+        let selector = Selector(("timeIsSignificant"))
+        let hasTime = match.responds(to: selector) ? (match.value(forKey: "timeIsSignificant") as? Bool ?? true) : true
+        let units: Set<Calendar.Component> = hasTime ? [.year, .month, .day, .hour, .minute] : [.year, .month, .day]
+        return Calendar.current.dateComponents(units, from: date)
+    }
+}
+
+/// `NextUp --add <title> [when]`, run by scripts/todo through `open` so it has NextUp's Reminders grant.
+enum TodoCommand {
+    static func add(_ arguments: [String]) -> Int32 {
+        guard let title = arguments.first?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            print("usage: todo <title> [when]")
+            return 64
+        }
+        let store = TodoStore()
+        guard store.access == .granted else {
+            print("error: NextUp has no Reminders access. Click Allow in the To do section of the popover.")
+            return 1
+        }
+        let when = arguments.dropFirst().joined(separator: " ")
+        var due: DateComponents?
+        if !when.isEmpty {
+            guard let parsed = DuePhrase.parse(when) else {
+                print("error: can't read a date from \"\(when)\". Try \"tomorrow\", \"friday 3pm\", or \"oct 25\".")
+                return 1
+            }
+            due = parsed
+        }
+        do {
+            try store.add(title, due: due)
+        } catch {
+            print("error: \(error.localizedDescription)")
+            return 1
+        }
+        let dueText = due.flatMap { Calendar.current.date(from: $0) }.map { date in
+            due?.hour == nil ? date.formatted(date: .abbreviated, time: .omitted) : date.formatted(date: .abbreviated, time: .shortened)
+        }
+        print("Added \"\(title)\" to \(TodoStore.listName)" + (dueText.map { ", due \($0)" } ?? ""))
+        return 0
+    }
 }
 
 /// Reads and writes a "NextUp" list in Reminders. It lives in the same account as the default
@@ -67,9 +121,12 @@ final class TodoStore {
         }
     }
 
-    func add(_ title: String) throws {
+    func add(_ title: String, due: DateComponents? = nil, notes: String? = nil, url: URL? = nil) throws {
         let reminder = EKReminder(eventStore: store)
         reminder.title = title
+        reminder.dueDateComponents = due
+        reminder.notes = notes
+        reminder.url = url
         reminder.calendar = try list()
         try store.save(reminder, commit: true)
     }

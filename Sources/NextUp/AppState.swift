@@ -256,6 +256,26 @@ final class AppState: ObservableObject {
         reloadTodos()
     }
 
+    /// Turns a Slack notification into a todo that links back to the message.
+    func addTodo(from item: SlackItem) {
+        let sender = item.subtitle.isEmpty ? item.title : "\(item.subtitle) in \(item.title)"
+        let body = item.body.split(whereSeparator: \.isNewline).joined(separator: " ")
+        let title = body.isEmpty ? "Reply to \(sender)" : "\(sender): \(Format.menuBarTitle(body, limit: 80))"
+        do {
+            try todoStore.add(title, notes: item.body.isEmpty ? nil : item.body, url: item.link)
+        } catch {
+            todoError = error.localizedDescription
+        }
+        reloadTodos()
+    }
+
+    /// Opens what the todo came from (a Slack message), otherwise Reminders.
+    func open(_ todo: Todo) {
+        closePopover()
+        if let url = todo.url, NSWorkspace.shared.open(url) { return }
+        TodoStore.openRemindersApp()
+    }
+
     func openReminders() {
         closePopover()
         TodoStore.openRemindersApp()

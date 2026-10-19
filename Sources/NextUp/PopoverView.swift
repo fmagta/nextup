@@ -279,12 +279,13 @@ private struct TodoRow: View {
         .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? Color.primary.opacity(0.07) : .clear))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { state.openReminders() }
+        .onTapGesture { state.open(todo) }
         .contextMenu {
             Button("Mark Done") { state.complete([todo]) }
+            if todo.url != nil { Button("Open in Slack") { state.open(todo) } }
             Button("Open Reminders") { state.openReminders() }
         }
-        .help("Open in Reminders")
+        .help(todo.url == nil ? "Open in Reminders" : "Open in Slack")
         .padding(.horizontal, 6)
     }
 }
@@ -345,6 +346,8 @@ private struct SlackSection: View {
                             ForEach(state.slackItems) { item in
                                 SlackRow(item: item, isNew: item.date > state.highlightSince, now: state.now) {
                                     state.open(item)
+                                } addTodo: {
+                                    withAnimation { state.addTodo(from: item) }
                                 }
                             }
                         }
@@ -367,6 +370,7 @@ private struct SlackRow: View {
     let isNew: Bool
     let now: Date
     let open: () -> Void
+    let addTodo: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -388,6 +392,15 @@ private struct SlackRow: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 4)
+                    if hovering {
+                        Button(action: addTodo) {
+                            Image(systemName: "checklist")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add to To do")
+                    }
                     Text(Format.ago(item.date, now: now))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.tertiary)
@@ -408,6 +421,10 @@ private struct SlackRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: open)
+        .contextMenu {
+            Button(item.link == nil ? "Open Slack" : "Open in Slack", action: open)
+            Button("Add to To do", action: addTodo)
+        }
         .help(item.link == nil ? "Open Slack" : "Open in Slack")
     }
 }

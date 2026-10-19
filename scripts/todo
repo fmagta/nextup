@@ -1,0 +1,24 @@
+#!/bin/bash
+# Adds a todo to the NextUp list in Reminders.
+#   todo "Fix the flaky test"
+#   todo "Send the release notes" tomorrow 10am
+# Runs NextUp through `open` so it uses NextUp's Reminders grant rather than the terminal's.
+set -euo pipefail
+
+if [ $# -lt 1 ] || [ -z "$1" ]; then
+  echo "usage: todo <title> [when]" >&2
+  exit 64
+fi
+
+APP="$HOME/Applications/NextUp.app"
+[ -d "$APP" ] || { echo "error: $APP not found. Run scripts/build.sh first." >&2; exit 1; }
+
+out="$(mktemp)"
+trap 'rm -f "$out"' EXIT
+# A fast exit can beat `open -W` to the process ("Unable to block on applications"), which is harmless:
+# the output file is already written.
+open -n -g -W --stdout "$out" --stderr "$out" "$APP" --args --add "$@" 2>/dev/null || true
+
+cat "$out"
+# `open` doesn't pass the exit code through, so read it from the output.
+! grep -q '^error:\|^usage:' "$out"

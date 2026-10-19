@@ -9,6 +9,9 @@ func argument(after flag: String) -> String? {
 
 // Debug modes. Launch them through `open NextUp.app --args ...` so they run with the app's
 // privacy grants (Full Disk Access) rather than the terminal's.
+if let index = arguments.firstIndex(of: "--add") {
+    exit(TodoCommand.add(Array(arguments[(index + 1)...])))
+}
 if arguments.contains("--dump") {
     NotificationStore.dump(to: argument(after: "--dump") ?? NSTemporaryDirectory() + "nextup-dump.txt")
     exit(0)
