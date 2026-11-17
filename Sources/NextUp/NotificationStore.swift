@@ -11,6 +11,26 @@ struct SlackItem: Identifiable, Hashable {
     let link: URL?
 }
 
+/// A rule for hiding Slack notifications. A channel banner's subtitle is the channel (`#name`) and
+/// its body starts with "Sender: "; a DM's subtitle is the sender.
+enum SlackMute {
+    case channel(String)
+    case channelsStarting(with: String)
+    case sender(String)
+
+    func matches(_ item: SlackItem) -> Bool {
+        switch self {
+        case .channel(let name):
+            return item.subtitle.caseInsensitiveCompare(name) == .orderedSame
+        case .channelsStarting(let prefix):
+            return item.subtitle.lowercased().hasPrefix(prefix.lowercased())
+        case .sender(let name):
+            return item.subtitle.caseInsensitiveCompare(name) == .orderedSame
+                || item.body.lowercased().hasPrefix(name.lowercased() + ":")
+        }
+    }
+}
+
 enum SlackStatus: Equatable {
     case loading
     case ok

@@ -45,7 +45,7 @@ By default macOS hides the menu bar in full-screen apps. To keep NextUp visible 
 open -n ~/Applications/NextUp.app --args --dump /tmp/nextup-dump.txt
 ```
 
-Settings to tweak live at the top of `AppState.swift` (countdown window, Slack history window) and `MeetingReminders.swift` (reminder lead time).
+Settings to tweak live at the top of `AppState.swift` (countdown window, Slack history window, muted Slack channels and senders in `mutedSlack`) and `MeetingReminders.swift` (reminder lead time).
 
 ## License
 

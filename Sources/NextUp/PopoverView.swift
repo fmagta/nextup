@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// The macOS 27 SDK makes `@State` a macro whose plugin ships only with Xcode, so a Command Line
+/// Tools build can't expand it. An alias reaches the `State` property wrapper directly instead.
+typealias ViewState = SwiftUI.State
+
 struct PopoverView: View {
     @ObservedObject var state: AppState
 
@@ -61,7 +65,7 @@ private struct FeaturedMeeting: View {
     let meeting: Meeting
     let now: Date
     let state: AppState
-    @State private var hovering = false
+    @ViewState private var hovering = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -112,7 +116,7 @@ private struct FeaturedMeeting: View {
 private struct CompactMeetingRow: View {
     let meeting: Meeting
     let state: AppState
-    @State private var hovering = false
+    @ViewState private var hovering = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -175,7 +179,7 @@ private struct DayLabel: View {
 
 private struct TodosSection: View {
     @ObservedObject var state: AppState
-    @State private var draft = ""
+    @ViewState private var draft = ""
     /// Past this many rows the rest are behind a link to Reminders, so the popover keeps its height.
     private let limit = 8
 
@@ -245,8 +249,8 @@ private struct TodoRow: View {
     let todo: Todo
     let now: Date
     let state: AppState
-    @State private var hovering = false
-    @State private var checked = false
+    @ViewState private var hovering = false
+    @ViewState private var checked = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -371,7 +375,7 @@ private struct SlackRow: View {
     let now: Date
     let open: () -> Void
     let addTodo: () -> Void
-    @State private var hovering = false
+    @ViewState private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {

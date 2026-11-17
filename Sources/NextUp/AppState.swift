@@ -10,6 +10,12 @@ final class AppState: ObservableObject {
     static let justStartedGrace: TimeInterval = 5 * 60
     /// Slack notifications older than this drop off the list.
     static let slackWindow: TimeInterval = 24 * 3600
+    /// Slack notifications NextUp never shows or counts. Add a line to mute another channel or sender.
+    static let mutedSlack: [SlackMute] = [
+        .channelsStarting(with: "#technical-dribble"), // also #technical-dribble-prod
+        .channel("#github-notifications"),
+        .sender("GitHub"), // the GitHub app, in any channel or DM
+    ]
 
     @Published private(set) var now = Date()
     @Published private(set) var meetings: [Meeting] = []
@@ -106,9 +112,10 @@ final class AppState: ObservableObject {
         let modified = NotificationStore.lastModified()
         if !force, slackStatus == .ok, let modified, modified == storeModified { return }
 
-        switch NotificationStore.fetchSlack(since: Date().addingTimeInterval(-Self.slackWindow)) {
+        // Fetch extra rows so muted channels can't crowd real messages out of the list.
+        switch NotificationStore.fetchSlack(since: Date().addingTimeInterval(-Self.slackWindow), limit: 200) {
         case .success(let items):
-            fetchedSlack = items
+            fetchedSlack = items.filter { item in !Self.mutedSlack.contains { $0.matches(item) } }
             storeModified = modified
             slackStatus = .ok
         case .failure(.noAccess):
