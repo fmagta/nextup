@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
     static let mutedSlack: [SlackMute] = [
         .channelsStarting(with: "#technical-dribble"), // also #technical-dribble-prod
         .channel("#github-notifications"),
+        .channel("#azure-deployments"),
         .sender("GitHub"), // the GitHub app, in any channel or DM
     ]
 
