@@ -62,6 +62,10 @@ final class AppState: ObservableObject {
     private static func clearedKey(_ app: ChatApp) -> String {
         app == .slack ? "clearedBefore" : "clearedBefore.\(app.rawValue)"
     }
+    private var todoOrder: [String] {
+        get { defaults.stringArray(forKey: "todoOrder") ?? [] }
+        set { defaults.set(newValue, forKey: "todoOrder") }
+    }
     private var dismissed: Set<Int> {
         get { Set(defaults.array(forKey: "dismissed") as? [Int] ?? []) }
         set { defaults.set(Array(newValue), forKey: "dismissed") }
@@ -177,7 +181,7 @@ final class AppState: ObservableObject {
         }
         Task {
             do {
-                let fetched = try await todoStore.todos()
+                let fetched = TodoOrder.apply(todoOrder, to: try await todoStore.todos())
                 if fetched != todos { todos = fetched }
                 todoError = nil
             } catch {
@@ -246,6 +250,21 @@ final class AppState: ObservableObject {
             if !Task.isCancelled { self?.recentlyCompleted = [] }
         }
         reloadTodos()
+    }
+
+    /// Moves a todo into another's slot: below it when dragged down, above it when dragged up.
+    func moveTodo(_ id: String, to targetID: String) {
+        guard id != targetID,
+              let from = todos.firstIndex(where: { $0.id == id }),
+              let to = todos.firstIndex(where: { $0.id == targetID }) else { return }
+        todos.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
+        todoOrder = todos.map(\.id)
+    }
+
+    func moveTodoToEnd(_ id: String, top: Bool) {
+        guard let from = todos.firstIndex(where: { $0.id == id }) else { return }
+        todos.move(fromOffsets: [from], toOffset: top ? 0 : todos.count)
+        todoOrder = todos.map(\.id)
     }
 
     func completeAllTodos() {

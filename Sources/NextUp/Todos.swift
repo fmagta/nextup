@@ -30,6 +30,19 @@ extension Todo {
     }
 }
 
+/// The order the todos were dragged into. EventKit can't read or write Reminders' own manual
+/// order, so NextUp keeps this one itself, on this Mac only.
+enum TodoOrder {
+    /// Puts todos in the saved order. Ones the order doesn't know yet (new since the last move) go
+    /// on top in their default order, where the three visible rows will show them.
+    static func apply(_ order: [String], to todos: [Todo]) -> [Todo] {
+        let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let new = todos.filter { rank[$0.id] == nil }
+        let known = todos.filter { rank[$0.id] != nil }.sorted { rank[$0.id]! < rank[$1.id]! }
+        return new + known
+    }
+}
+
 enum TodoError: LocalizedError {
     case noAccount
 

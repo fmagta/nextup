@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The macOS 27 SDK makes `@State` a macro whose plugin ships only with Xcode, so a Command Line
 /// Tools build can't expand it. An alias reaches the `State` property wrapper directly instead.
@@ -188,6 +189,8 @@ private struct DayLabel: View {
 private struct TodosSection: View {
     @ObservedObject var state: AppState
     @ViewState private var draft = ""
+    /// The todo being dragged, so rows it passes over can make room for it.
+    @ViewState private var dragging: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -205,6 +208,11 @@ private struct TodosSection: View {
                 }
                 CappedList(items: state.todos, id: \.id) { todo in
                     TodoRow(todo: todo, now: state.now, state: state)
+                        .onDrag {
+                            dragging = todo.id
+                            return NSItemProvider(object: todo.id as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: TodoDropDelegate(target: todo, dragging: $dragging, state: state))
                 }
                 if !state.recentlyCompleted.isEmpty {
                     UndoRow(count: state.recentlyCompleted.count) { withAnimation { state.undoComplete() } }
@@ -291,9 +299,33 @@ private struct TodoRow: View {
             Button("Mark Done") { state.complete([todo]) }
             if todo.url != nil { Button(openLabel) { state.open(todo) } }
             Button("Open Reminders") { state.openReminders() }
+            Divider()
+            Button("Move to Top") { withAnimation { state.moveTodoToEnd(todo.id, top: true) } }
+            Button("Move to Bottom") { withAnimation { state.moveTodoToEnd(todo.id, top: false) } }
         }
         .help(todo.url == nil ? "Open in Reminders" : openLabel)
         .padding(.horizontal, 6)
+    }
+}
+
+/// Reorders live as a dragged todo passes over other rows, so the list shows where it will land.
+private struct TodoDropDelegate: DropDelegate {
+    let target: Todo
+    @Binding var dragging: String?
+    let state: AppState
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging, dragging != target.id else { return }
+        withAnimation(.easeInOut(duration: 0.15)) { state.moveTodo(dragging, to: target.id) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        return true
     }
 }
 
