@@ -8,8 +8,8 @@ final class AppState: ObservableObject {
     static let countdownWindow: TimeInterval = 60 * 60
     /// A meeting stays in the menu bar for this long after it starts.
     static let justStartedGrace: TimeInterval = 5 * 60
-    /// Slack notifications older than this drop off the list.
-    static let slackWindow: TimeInterval = 24 * 3600
+    /// Slack and Teams notifications older than this drop off the list.
+    static let messageWindow: TimeInterval = 24 * 3600
     /// Slack notifications NextUp never shows or counts. Add a line to mute another channel or sender.
     static let mutedSlack: [SlackMute] = [
         .channelsStarting(with: "#technical-dribble"), // also #technical-dribble-prod
@@ -21,8 +21,9 @@ final class AppState: ObservableObject {
     @Published private(set) var now = Date()
     @Published private(set) var meetings: [Meeting] = []
     @Published private(set) var calendarAccess: CalendarAccess
-    @Published private(set) var slackStatus: SlackStatus = .loading
-    @Published private(set) var slackItems: [SlackItem] = []
+    @Published private(set) var inboxStatus: InboxStatus = .loading
+    /// Slack and Teams messages still in the list, newest first.
+    @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var unseenCount = 0
     /// Items newer than this get the "new" dot while the popover is open.
     @Published private(set) var highlightSince = Date.distantFuture
@@ -39,7 +40,7 @@ final class AppState: ObservableObject {
     private let reminders = MeetingReminders()
     private let todoStore = TodoStore()
     private var undoExpiry: Task<Void, Never>?
-    private var fetchedSlack: [SlackItem] = []
+    private var fetchedMessages: [ChatMessage] = []
     private var storeModified: Date?
     private var popoverOpen = false
     private var timers: [Timer] = []
@@ -51,9 +52,15 @@ final class AppState: ObservableObject {
         get { Date(timeIntervalSinceReferenceDate: defaults.double(forKey: "lastSeen")) }
         set { defaults.set(newValue.timeIntervalSinceReferenceDate, forKey: "lastSeen") }
     }
-    private var clearedBefore: Date {
-        get { Date(timeIntervalSinceReferenceDate: defaults.double(forKey: "clearedBefore")) }
-        set { defaults.set(newValue.timeIntervalSinceReferenceDate, forKey: "clearedBefore") }
+    private func clearedBefore(_ app: ChatApp) -> Date {
+        Date(timeIntervalSinceReferenceDate: defaults.double(forKey: Self.clearedKey(app)))
+    }
+    private func setClearedBefore(_ date: Date, for app: ChatApp) {
+        defaults.set(date.timeIntervalSinceReferenceDate, forKey: Self.clearedKey(app))
+    }
+    // Slack keeps the key it had before Teams arrived, so an earlier Clear still holds.
+    private static func clearedKey(_ app: ChatApp) -> String {
+        app == .slack ? "clearedBefore" : "clearedBefore.\(app.rawValue)"
     }
     private var dismissed: Set<Int> {
         get { Set(defaults.array(forKey: "dismissed") as? [Int] ?? []) }
@@ -69,7 +76,7 @@ final class AppState: ObservableObject {
 
     func start() {
         reminders.activate()
-        repeatEvery(5) { $0.pollSlack() }
+        repeatEvery(5) { $0.pollMessages() }
         repeatEvery(15) { $0.tick() }
         repeatEvery(300) {
             $0.reloadCalendar()
@@ -84,7 +91,7 @@ final class AppState: ObservableObject {
             $0.reloadCalendar()
             $0.reloadTodos()
         }
-        pollSlack(force: true)
+        pollMessages(force: true)
         if calendarAccess == .notDetermined { requestCalendarAccess() } else { reloadCalendar() }
         // Reminders access is asked from the popover, so it doesn't stack on the calendar prompt at launch.
         reloadTodos()
@@ -106,41 +113,46 @@ final class AppState: ObservableObject {
 
     func tick() {
         now = Date()
-        recomputeSlack()
+        recomputeMessages()
     }
 
-    func pollSlack(force: Bool = false) {
+    func messages(from app: ChatApp) -> [ChatMessage] {
+        messages.filter { $0.app == app }
+    }
+
+    func pollMessages(force: Bool = false) {
         let modified = NotificationStore.lastModified()
-        if !force, slackStatus == .ok, let modified, modified == storeModified { return }
+        if !force, inboxStatus == .ok, let modified, modified == storeModified { return }
 
         // Fetch extra rows so muted channels can't crowd real messages out of the list.
-        switch NotificationStore.fetchSlack(since: Date().addingTimeInterval(-Self.slackWindow), limit: 200) {
+        switch NotificationStore.fetchMessages(since: Date().addingTimeInterval(-Self.messageWindow), limit: 200) {
         case .success(let items):
-            fetchedSlack = items.filter { item in !Self.mutedSlack.contains { $0.matches(item) } }
+            fetchedMessages = items.filter { item in !Self.mutedSlack.contains { $0.matches(item) } }
             storeModified = modified
-            slackStatus = .ok
+            inboxStatus = .ok
         case .failure(.noAccess):
-            fetchedSlack = []
-            slackStatus = .needsFullDiskAccess
+            fetchedMessages = []
+            inboxStatus = .needsFullDiskAccess
         case .failure(.sqlite(let message)):
-            slackStatus = .error(message)
+            inboxStatus = .error(message)
         }
-        recomputeSlack()
+        recomputeMessages()
     }
 
-    private func recomputeSlack() {
+    private func recomputeMessages() {
         if popoverOpen { lastSeen = Date() }
         let hidden = dismissed
-        let cutoff = max(now.addingTimeInterval(-Self.slackWindow), clearedBefore)
-        let visible = fetchedSlack.filter { $0.date > cutoff && !hidden.contains($0.id) }
-        if visible != slackItems { slackItems = visible }
+        let window = now.addingTimeInterval(-Self.messageWindow)
+        let cutoffs = Dictionary(uniqueKeysWithValues: ChatApp.allCases.map { ($0, max(window, clearedBefore($0))) })
+        let visible = fetchedMessages.filter { $0.date > cutoffs[$0.app]! && !hidden.contains($0.id) }
+        if visible != messages { messages = visible }
 
         let unseen = visible.filter { $0.date > lastSeen }.count
         if unseen != unseenCount { unseenCount = unseen }
 
         // Forget dismissals for records macOS has already purged.
-        if slackStatus == .ok {
-            let live = Set(fetchedSlack.map(\.id))
+        if inboxStatus == .ok {
+            let live = Set(fetchedMessages.map(\.id))
             let pruned = hidden.intersection(live)
             if pruned.count != hidden.count { dismissed = pruned }
         }
@@ -180,32 +192,31 @@ final class AppState: ObservableObject {
         highlightSince = lastSeen
         popoverOpen = true
         tick()
-        pollSlack(force: true)
+        pollMessages(force: true)
         reloadTodos()
     }
 
     func popoverDidClose() {
         popoverOpen = false
         highlightSince = .distantFuture
-        recomputeSlack()
+        recomputeMessages()
     }
 
-    func open(_ item: SlackItem) {
+    func open(_ item: ChatMessage) {
         dismissed.insert(item.id)
-        recomputeSlack()
+        recomputeMessages()
         closePopover()
-        SlackApp.open(item.link)
+        item.app.open(item.link)
     }
 
-    func clearSlack() {
-        clearedBefore = Date()
-        dismissed = []
-        recomputeSlack()
+    func clear(_ app: ChatApp) {
+        setClearedBefore(Date(), for: app)
+        recomputeMessages()
     }
 
-    func openSlack() {
+    func openApp(_ app: ChatApp) {
         closePopover()
-        SlackApp.open(nil)
+        app.open(nil)
     }
 
     func open(_ meeting: Meeting) {
@@ -264,8 +275,8 @@ final class AppState: ObservableObject {
         reloadTodos()
     }
 
-    /// Turns a Slack notification into a todo that links back to the message.
-    func addTodo(from item: SlackItem) {
+    /// Turns a Slack or Teams notification into a todo that links back to its chat.
+    func addTodo(from item: ChatMessage) {
         let sender = item.subtitle.isEmpty ? item.title : "\(item.subtitle) in \(item.title)"
         let body = item.body.split(whereSeparator: \.isNewline).joined(separator: " ")
         let title = body.isEmpty ? "Reply to \(sender)" : "\(sender): \(Format.menuBarTitle(body, limit: 80))"
@@ -277,10 +288,13 @@ final class AppState: ObservableObject {
         reloadTodos()
     }
 
-    /// Opens what the todo came from (a Slack message), otherwise Reminders.
+    /// Opens the chat the todo came from, otherwise Reminders.
     func open(_ todo: Todo) {
         closePopover()
-        if let url = todo.url, NSWorkspace.shared.open(url) { return }
+        if let url = todo.url {
+            if let app = ChatApp(link: url) { app.open(url) } else { NSWorkspace.shared.open(url) }
+            return
+        }
         TodoStore.openRemindersApp()
     }
 
@@ -388,14 +402,21 @@ extension AppState {
             Todo(id: "t1", title: "Send the release notes", due: now.addingTimeInterval(-26 * 3600), dueHasTime: false),
             Todo(id: "t2", title: "Review the onboarding PR", due: now.addingTimeInterval(3 * 3600), dueHasTime: true),
             Todo(id: "t3", title: "Book flights for the offsite", due: nil, dueHasTime: false),
+            Todo(id: "t4", title: "Renew the domain", due: now.addingTimeInterval(5 * 86_400), dueHasTime: false),
         ]
-        state.slackStatus = .ok
-        state.slackItems = [
-            SlackItem(id: 1, date: now.addingTimeInterval(-2 * minute), title: "Alex Rivera", subtitle: "", body: "Can you look over the release notes before standup? Want to send them out this morning.", link: nil),
-            SlackItem(id: 2, date: now.addingTimeInterval(-9 * minute), title: "#team-updates", subtitle: "Sam Taylor", body: "The deploy finished, everything looks good", link: nil),
-            SlackItem(id: 3, date: now.addingTimeInterval(-3 * 3600), title: "Maya Chen", subtitle: "", body: "Thanks! Merged.", link: nil),
+        func message(_ id: Int, _ app: ChatApp, _ minutesAgo: Double, _ title: String, _ subtitle: String, _ body: String) -> ChatMessage {
+            ChatMessage(id: id, app: app, date: now.addingTimeInterval(-minutesAgo * minute), title: title, subtitle: subtitle, body: body, link: nil)
+        }
+        state.inboxStatus = .ok
+        state.messages = [
+            message(1, .slack, 2, "Alex Rivera", "", "Can you look over the release notes before standup? Want to send them out this morning."),
+            message(5, .teams, 4, "Jordan and Priya", "", "Priya: @you can you approve the vendor form today?"),
+            message(2, .slack, 9, "#team-updates", "Sam Taylor", "The deploy finished, everything looks good"),
+            message(6, .teams, 50, "Chris Lee", "", "Sent you the contract draft"),
+            message(3, .slack, 180, "Maya Chen", "", "Thanks! Merged."),
+            message(4, .slack, 240, "#design", "Jo Park", "New mocks are up for review"),
         ]
-        state.unseenCount = 2
+        state.unseenCount = 3
         state.highlightSince = now.addingTimeInterval(-10 * minute)
         return state
     }

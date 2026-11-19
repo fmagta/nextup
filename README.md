@@ -1,18 +1,19 @@
 # NextUp
 
-A menu bar app that shows your Slack notifications, your next meeting, and your todos in one icon.
+A menu bar app that shows your Slack and Teams notifications, your next meeting, and your todos in one icon.
 
-- **Menu bar:** a bell with the count of Slack notifications you haven't looked at yet. When a meeting is less than an hour away, its name and a countdown appear next to the bell (`2 · Sprint planning 12m`). The countdown turns orange at 15 minutes and red at 5.
-- **Popover:** click the bell. It shows the next meeting (with a **Join** button for Meet, Zoom, Teams, or Webex links), the rest of today and tomorrow, your todos, and the last 24 hours of Slack notifications. New ones have a blue dot.
+- **Menu bar:** a bell with the count of Slack and Teams notifications you haven't looked at yet. When a meeting is less than an hour away, its name and a countdown appear next to the bell (`2 · Sprint planning 12m`). The countdown turns orange at 15 minutes and red at 5.
+- **Popover:** click the bell. It shows the next meeting (with a **Join** button for Meet, Zoom, Teams, or Webex links), the rest of today and tomorrow, your todos, and the last 24 hours of Slack and Teams notifications. New ones have a blue dot. Each section shows three rows and scrolls the rest.
 - **Todos:** tick the circle to complete one, or use **Mark all done** in the header. Either way an **Undo** row stays for 8 seconds. Type in **Add a todo** and press Return to add one. Overdue items are red. Click a todo to open Reminders.
-- **Slack to todo:** hover a Slack notification and click the checklist icon, or right-click it and pick **Add to To do**. The todo is titled with the sender and message, and clicking it opens the message in Slack.
+- **Message to todo:** hover a Slack or Teams notification and click the checklist icon, or right-click it and pick **Add to To do**. The todo is titled with the sender and message, and clicking it opens the chat it came from.
 - **From the terminal:** `todo "Fix the flaky test"` or `todo "Send the release notes" tomorrow 10am`. The date part takes phrases like `tomorrow`, `friday 3pm`, or `oct 25`. Link it once with `ln -sf "$PWD/scripts/todo" ~/.local/bin/todo` (any directory on your `PATH` works).
-- **Click to go:** a Slack row brings Slack to the front. It can't jump to the exact channel, because Slack's Mac notifications carry only the workspace ID and message timestamp, not the channel. A meeting opens the call in its desktop app when one is installed (Zoom, Teams), otherwise in the browser. Meetings without a link open in Calendar. Right-click a meeting to copy its link or show it in Calendar.
+- **Click to go:** a Slack row brings Slack to the front. It can't jump to the exact channel, because Slack's Mac notifications carry only the workspace ID and message timestamp, not the channel. A Teams row opens that chat in Teams, since Teams notifications carry the conversation ID. A meeting opens the call in its desktop app when one is installed (Zoom, Teams), otherwise in the browser. Meetings without a link open in Calendar. Right-click a meeting to copy its link or show it in Calendar.
 - **Reminder:** one minute before each meeting you get a banner with a **Join** button. Banners show over full-screen apps.
 
 ## How it gets the data
 
 - **Slack:** NextUp doesn't talk to Slack. It reads the notifications Slack has already posted to macOS Notification Center, from `~/Library/Group Containers/group.com.apple.usernoted/db2/db`, read-only. You see the same DMs, mentions, and keywords that Slack would show as a banner, and no Slack app or token is needed. macOS protects that file, so NextUp needs **Full Disk Access**.
+- **Teams:** the same file. New Teams posts its banners there only when Teams › Settings › Notifications and activity › **Notification style** is set to **Mac**. You see whatever Teams notifies you about: chats, @mentions, and anything else turned on in that settings page.
 - **Meetings:** EventKit, so any account in Calendar.app works (Google, Exchange, iCloud). Declined, cancelled, and all-day events are skipped.
 - **Todos:** a **NextUp** list in Reminders, through EventKit. NextUp creates the list on first use, in the same account as your default Reminders list (usually iCloud), so it syncs to your phone and Siri can add to it ("add … to my NextUp list"). Renaming the list in Reminders keeps it linked.
 

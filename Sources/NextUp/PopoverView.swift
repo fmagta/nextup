@@ -13,7 +13,12 @@ struct PopoverView: View {
             Divider()
             TodosSection(state: state)
             Divider()
-            SlackSection(state: state)
+            MessagesSection(app: .slack, state: state)
+            // Teams reads the same store as Slack, so Slack's section carries any permission prompt.
+            if state.inboxStatus == .ok {
+                Divider()
+                MessagesSection(app: .teams, state: state)
+            }
             Divider()
             Footer(state: state)
         }
@@ -34,13 +39,16 @@ private struct MeetingsSection: View {
                 let upcoming = state.upcoming
                 if let first = upcoming.first {
                     FeaturedMeeting(meeting: first, now: state.now, state: state)
-                    let rest = Array(upcoming.dropFirst().prefix(4))
-                    ForEach(Array(rest.enumerated()), id: \.element.id) { index, meeting in
+                    let rest = Array(upcoming.dropFirst())
+                    // The featured meeting counts as one of the visible rows.
+                    CappedList(items: Array(rest.enumerated()), id: \.element.id, visible: visibleRows - 1) { index, meeting in
                         let previous = index == 0 ? first : rest[index - 1]
-                        if !Calendar.current.isDate(meeting.start, inSameDayAs: previous.start) {
-                            DayLabel(date: meeting.start)
+                        VStack(alignment: .leading, spacing: 0) {
+                            if !Calendar.current.isDate(meeting.start, inSameDayAs: previous.start) {
+                                DayLabel(date: meeting.start)
+                            }
+                            CompactMeetingRow(meeting: meeting, state: state)
                         }
-                        CompactMeetingRow(meeting: meeting, state: state)
                     }
                     Spacer().frame(height: 6)
                 } else {
@@ -180,8 +188,6 @@ private struct DayLabel: View {
 private struct TodosSection: View {
     @ObservedObject var state: AppState
     @ViewState private var draft = ""
-    /// Past this many rows the rest are behind a link to Reminders, so the popover keeps its height.
-    private let limit = 8
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -197,15 +203,8 @@ private struct TodosSection: View {
                 if let error = state.todoError {
                     EmptyRow(symbol: "exclamationmark.triangle", text: "Can't reach Reminders: \(error)")
                 }
-                ForEach(state.todos.prefix(limit)) { todo in
+                CappedList(items: state.todos, id: \.id) { todo in
                     TodoRow(todo: todo, now: state.now, state: state)
-                }
-                if state.todos.count > limit {
-                    Button("\(state.todos.count - limit) more in Reminders") { state.openReminders() }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 4)
                 }
                 if !state.recentlyCompleted.isEmpty {
                     UndoRow(count: state.recentlyCompleted.count) { withAnimation { state.undoComplete() } }
@@ -252,6 +251,10 @@ private struct TodoRow: View {
     @ViewState private var hovering = false
     @ViewState private var checked = false
 
+    private var openLabel: String {
+        todo.url.flatMap { ChatApp(link: $0) }.map { "Open in \($0.name)" } ?? "Open Link"
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Button {
@@ -286,10 +289,10 @@ private struct TodoRow: View {
         .onTapGesture { state.open(todo) }
         .contextMenu {
             Button("Mark Done") { state.complete([todo]) }
-            if todo.url != nil { Button("Open in Slack") { state.open(todo) } }
+            if todo.url != nil { Button(openLabel) { state.open(todo) } }
             Button("Open Reminders") { state.openReminders() }
         }
-        .help(todo.url == nil ? "Open in Reminders" : "Open in Slack")
+        .help(todo.url == nil ? "Open in Reminders" : openLabel)
         .padding(.horizontal, 6)
     }
 }
@@ -313,27 +316,30 @@ private struct UndoRow: View {
     }
 }
 
-// MARK: Slack
+// MARK: Messages
 
-private struct SlackSection: View {
+private struct MessagesSection: View {
+    let app: ChatApp
     @ObservedObject var state: AppState
 
     var body: some View {
+        let items = state.messages(from: app)
+        let newCount = items.filter { $0.date > state.highlightSince }.count
         VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: "Slack", detail: newCount > 0 ? "\(newCount) new" : nil) {
-                if !state.slackItems.isEmpty {
-                    Button("Clear") { state.clearSlack() }
+            SectionHeader(title: app.name, detail: newCount > 0 ? "\(newCount) new" : nil) {
+                if !items.isEmpty {
+                    Button("Clear") { state.clear(app) }
                         .buttonStyle(.borderless)
                         .font(.system(size: 11))
                 }
             }
-            switch state.slackStatus {
+            switch state.inboxStatus {
             case .loading:
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(12)
             case .needsFullDiskAccess:
                 PermissionRow(
                     symbol: "lock.shield",
-                    message: "Mirroring Slack needs Full Disk Access.",
+                    message: "Mirroring \(app.name) needs Full Disk Access.",
                     detail: "NextUp reads macOS's notification list read-only. In Full Disk Access, click +, pick NextUp from ~/Applications, then relaunch."
                 ) {
                     Button("Open Settings") { state.openFullDiskAccessSettings() }
@@ -342,40 +348,34 @@ private struct SlackSection: View {
             case .error(let message):
                 EmptyRow(symbol: "exclamationmark.triangle", text: "Can't read notifications: \(message)")
             case .ok:
-                if state.slackItems.isEmpty {
+                if items.isEmpty {
                     EmptyRow(symbol: "checkmark.circle", text: "All caught up")
                 } else {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(state.slackItems) { item in
-                                SlackRow(item: item, isNew: item.date > state.highlightSince, now: state.now) {
-                                    state.open(item)
-                                } addTodo: {
-                                    withAnimation { state.addTodo(from: item) }
-                                }
-                            }
+                    CappedList(items: items, id: \.id) { item in
+                        MessageRow(item: item, isNew: item.date > state.highlightSince, now: state.now) {
+                            state.open(item)
+                        } addTodo: {
+                            withAnimation { state.addTodo(from: item) }
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.bottom, 6)
                     }
-                    .frame(maxHeight: 330)
+                    .padding(.bottom, 6)
                 }
             }
         }
     }
-
-    private var newCount: Int {
-        state.slackItems.filter { $0.date > state.highlightSince }.count
-    }
 }
 
-private struct SlackRow: View {
-    let item: SlackItem
+private struct MessageRow: View {
+    let item: ChatMessage
     let isNew: Bool
     let now: Date
     let open: () -> Void
     let addTodo: () -> Void
     @ViewState private var hovering = false
+
+    private var openLabel: String {
+        item.link == nil ? "Open \(item.app.name)" : "Open in \(item.app.name)"
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -426,10 +426,10 @@ private struct SlackRow: View {
         .onHover { hovering = $0 }
         .onTapGesture(perform: open)
         .contextMenu {
-            Button(item.link == nil ? "Open Slack" : "Open in Slack", action: open)
+            Button(openLabel, action: open)
             Button("Add to To do", action: addTodo)
         }
-        .help(item.link == nil ? "Open Slack" : "Open in Slack")
+        .help(openLabel)
     }
 }
 
@@ -449,6 +449,52 @@ private struct Avatar: View {
 }
 
 // MARK: Shared pieces
+
+/// Rows visible in each section before the rest scroll.
+private let visibleRows = 3
+
+/// Shows the first `visible` rows and scrolls the rest. The height comes from the rows themselves,
+/// so a section with two-line Slack messages and one with one-line todos both show whole rows.
+private struct CappedList<Item, ID: Hashable, Row: View>: View {
+    let items: [Item]
+    let id: KeyPath<Item, ID>
+    var visible = visibleRows
+    @ViewBuilder let row: (Item) -> Row
+    @ViewState private var heights: [ID: CGFloat] = [:]
+
+    var body: some View {
+        let scrolls = items.count > visible
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(items, id: id) { item in
+                    row(item).background(GeometryReader { proxy in
+                        Color.clear.preference(key: RowHeights.self, value: [AnyHashable(item[keyPath: id]): proxy.size.height])
+                    })
+                }
+            }
+        }
+        .scrollDisabled(!scrolls)
+        .scrollIndicators(scrolls ? .visible : .hidden)
+        .onPreferenceChange(RowHeights.self) { measured in
+            heights = Dictionary(uniqueKeysWithValues: measured.compactMap { key, value in (key.base as? ID).map { ($0, value) } })
+        }
+        .frame(height: height)
+    }
+
+    /// The first rows' total height, or nil until they've been measured.
+    private var height: CGFloat? {
+        let shown = items.prefix(visible).compactMap { heights[$0[keyPath: id]] }
+        guard !shown.isEmpty, shown.count == min(visible, items.count) else { return nil }
+        return shown.reduce(0, +)
+    }
+}
+
+private struct RowHeights: PreferenceKey {
+    static let defaultValue: [AnyHashable: CGFloat] = [:]
+    static func reduce(value: inout [AnyHashable: CGFloat], nextValue: () -> [AnyHashable: CGFloat]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
 
 private struct SectionHeader<Accessory: View>: View {
     let title: String
@@ -524,7 +570,7 @@ private struct Footer: View {
             Toggle("Open at login", isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
                 .toggleStyle(.checkbox)
             Spacer()
-            Button("Open Slack") { state.openSlack() }
+            Button("Open Slack") { state.openApp(.slack) }
                 .buttonStyle(.borderless)
             Button("Quit") { NSApp.terminate(nil) }
                 .buttonStyle(.borderless)

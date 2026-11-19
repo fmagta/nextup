@@ -1,9 +1,46 @@
 import AppKit
 import SQLite3
 
-/// One Slack banner mirrored from macOS Notification Center.
-struct SlackItem: Identifiable, Hashable {
+/// A chat app whose banners NextUp mirrors.
+enum ChatApp: String, CaseIterable {
+    case slack, teams
+
+    var bundleID: String {
+        switch self {
+        case .slack: "com.tinyspeck.slackmacgap"
+        case .teams: "com.microsoft.teams2"
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .slack: "Slack"
+        case .teams: "Teams"
+        }
+    }
+
+    /// The app a todo's link points back into, if it came from a message.
+    init?(link: URL) {
+        if link.scheme == "slack" { self = .slack } else if link.host == "teams.microsoft.com" { self = .teams } else { return nil }
+    }
+
+    /// Opens the message's chat when there's a link, otherwise just the app.
+    func open(_ link: URL?) {
+        if let link {
+            // Teams links go through the desktop app's msteams: scheme when it's installed, like meeting links.
+            let url = self == .teams ? MeetingLink(service: "Teams", url: link).launchURL : link
+            if NSWorkspace.shared.open(url) { return }
+        }
+        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+}
+
+/// One Slack or Teams banner mirrored from macOS Notification Center.
+struct ChatMessage: Identifiable, Hashable {
     let id: Int
+    let app: ChatApp
     let date: Date
     let title: String
     let subtitle: String
@@ -18,7 +55,8 @@ enum SlackMute {
     case channelsStarting(with: String)
     case sender(String)
 
-    func matches(_ item: SlackItem) -> Bool {
+    func matches(_ item: ChatMessage) -> Bool {
+        guard item.app == .slack else { return false }
         switch self {
         case .channel(let name):
             return item.subtitle.caseInsensitiveCompare(name) == .orderedSame
@@ -31,7 +69,7 @@ enum SlackMute {
     }
 }
 
-enum SlackStatus: Equatable {
+enum InboxStatus: Equatable {
     case loading
     case ok
     case needsFullDiskAccess
@@ -48,8 +86,6 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 /// Reads delivered notifications from usernoted's SQLite store (macOS 15+). The store is
 /// private to macOS, so reading it needs Full Disk Access. Opened read-only: usernoted owns it.
 enum NotificationStore {
-    static let slackBundleID = "com.tinyspeck.slackmacgap"
-
     static let dbURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Group Containers/group.com.apple.usernoted/db2/db")
 
@@ -60,9 +96,11 @@ enum NotificationStore {
             .max()
     }
 
-    static func fetchSlack(since: Date, limit: Int = 50) -> Result<[SlackItem], StoreError> {
+    /// Banners from every `ChatApp` since `since`, newest first. `limit` applies per app, so a busy
+    /// Slack can't push Teams out of the list.
+    static func fetchMessages(since: Date, limit: Int = 50) -> Result<[ChatMessage], StoreError> {
         withDatabase { db in
-            var items: [SlackItem] = []
+            var items: [ChatMessage] = []
             let sql = """
                 SELECT r.rec_id, r.data, COALESCE(r.delivered_date, r.request_date) AS delivered
                 FROM record r JOIN app a ON a.app_id = r.app_id
@@ -70,18 +108,20 @@ enum NotificationStore {
                 ORDER BY delivered DESC
                 LIMIT ?3
                 """
-            try rows(db, sql, bind: { stmt in
-                sqlite3_bind_text(stmt, 1, slackBundleID, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_double(stmt, 2, since.timeIntervalSinceReferenceDate)
-                sqlite3_bind_int(stmt, 3, Int32(limit))
-            }) { stmt in
-                let id = Int(sqlite3_column_int64(stmt, 0))
-                let date = Date(timeIntervalSinceReferenceDate: sqlite3_column_double(stmt, 2))
-                if let data = blob(stmt, 1), let item = SlackItem(id: id, date: date, record: data) {
-                    items.append(item)
+            for app in ChatApp.allCases {
+                try rows(db, sql, bind: { stmt in
+                    sqlite3_bind_text(stmt, 1, app.bundleID, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_double(stmt, 2, since.timeIntervalSinceReferenceDate)
+                    sqlite3_bind_int(stmt, 3, Int32(limit))
+                }) { stmt in
+                    let id = Int(sqlite3_column_int64(stmt, 0))
+                    let date = Date(timeIntervalSinceReferenceDate: sqlite3_column_double(stmt, 2))
+                    if let data = blob(stmt, 1), let item = ChatMessage(id: id, app: app, date: date, record: data) {
+                        items.append(item)
+                    }
                 }
             }
-            return items
+            return items.sorted { $0.date > $1.date }
         }
     }
 
@@ -166,11 +206,11 @@ enum NotificationStore {
                 JOIN app a ON a.app_id = r.app_id
                 WHERE lower(a.identifier) = lower(?1) ORDER BY r.rec_id DESC LIMIT 6
                 """
-            try rows(db, sql, bind: { sqlite3_bind_text($0, 1, slackBundleID, -1, SQLITE_TRANSIENT) }) { stmt in
+            try rows(db, sql, bind: { sqlite3_bind_text($0, 1, ChatApp.slack.bundleID, -1, SQLITE_TRANSIENT) }) { stmt in
                 text += "--- rec_id \(sqlite3_column_int64(stmt, 0)) delivered \(sqlite3_column_double(stmt, 2)) presented \(sqlite3_column_int(stmt, 3))\n"
                 if let data = blob(stmt, 1), let root = plist(data) {
                     text += describe(root, indent: 1)
-                    if let req = root["req"] as? [String: Any], let item = SlackItem(id: 0, date: Date(), record: data) {
+                    if let req = root["req"] as? [String: Any], let item = ChatMessage(id: 0, app: .slack, date: Date(), record: data) {
                         text += "  => link: \(item.link?.absoluteString ?? "none"), req keys: \(req.keys.sorted())\n"
                     }
                 }
@@ -213,21 +253,22 @@ enum NotificationStore {
     }
 }
 
-extension SlackItem {
+extension ChatMessage {
     /// Parses a usernoted record: a binary plist whose `req` dictionary carries the banner text
     /// (`titl`, `subt`, `body`) plus identifiers the sender attached.
-    init?(id: Int, date: Date, record: Data) {
+    init?(id: Int, app: ChatApp, date: Date, record: Data) {
         guard let root = NotificationStore.plist(record), let request = root["req"] as? [String: Any] else { return nil }
         let title = (request["titl"] as? String) ?? ""
         let body = (request["body"] as? String) ?? ""
         guard !title.isEmpty || !body.isEmpty else { return nil }
         self.init(
             id: id,
+            app: app,
             date: date,
             title: title,
             subtitle: (request["subt"] as? String) ?? "",
             body: body,
-            link: SlackLink.resolve(from: request)
+            link: app == .slack ? SlackLink.resolve(from: request) : TeamsLink.resolve(from: request)
         )
     }
 }
@@ -238,18 +279,40 @@ enum SlackLink {
     private static let teamPattern = try! NSRegularExpression(pattern: #"\bT(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,12}\b"#)
 
     static func resolve(from request: [String: Any]) -> URL? {
-        var hints: [String] = []
-        collect(request, into: &hints)
-        let text = hints.joined(separator: " ")
-        guard let channel = firstMatch(channelPattern, in: text) else { return nil }
+        let text = NotificationHints.text(from: request)
+        guard let channel = NotificationHints.firstMatch(channelPattern, in: text) else { return nil }
         var components = URLComponents()
         components.scheme = "slack"
         components.host = "channel"
         components.queryItems = [URLQueryItem(name: "id", value: channel)]
-        if let team = firstMatch(teamPattern, in: text) {
+        if let team = NotificationHints.firstMatch(teamPattern, in: text) {
             components.queryItems?.insert(URLQueryItem(name: "team", value: team), at: 0)
         }
         return components.url
+    }
+}
+
+/// Links to the Teams chat a banner came from, using the conversation ID Teams packs into the
+/// banner's user info (`19:…@unq.gbl.spaces` for a 1:1 chat, `@thread.v2` for a group or channel).
+enum TeamsLink {
+    private static let conversationPattern = try! NSRegularExpression(
+        pattern: #"19:[A-Za-z0-9_.\-]+@(?:thread\.v2|thread\.tacv2|thread\.skype|unq\.gbl\.spaces)"#
+    )
+
+    static func resolve(from request: [String: Any]) -> URL? {
+        guard let conversation = NotificationHints.firstMatch(conversationPattern, in: NotificationHints.text(from: request)) else {
+            return nil
+        }
+        return URL(string: "https://teams.microsoft.com/l/chat/\(conversation)/conversations")
+    }
+}
+
+/// The machine-readable parts of a banner, where apps put the IDs a deep link needs.
+enum NotificationHints {
+    static func text(from request: [String: Any]) -> String {
+        var hints: [String] = []
+        collect(request, into: &hints)
+        return hints.joined(separator: " ")
     }
 
     /// Gathers every string except the human-readable banner text, descending into nested plists.
@@ -268,20 +331,10 @@ enum SlackLink {
         }
     }
 
-    private static func firstMatch(_ regex: NSRegularExpression, in text: String) -> String? {
+    static func firstMatch(_ regex: NSRegularExpression, in text: String) -> String? {
         guard let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let range = Range(match.range, in: text) else { return nil }
         return String(text[range])
     }
 }
 
-enum SlackApp {
-    static let bundleURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: NotificationStore.slackBundleID)
-
-    static func open(_ link: URL?) {
-        if let link, NSWorkspace.shared.open(link) { return }
-        if let bundleURL {
-            NSWorkspace.shared.openApplication(at: bundleURL, configuration: NSWorkspace.OpenConfiguration())
-        }
-    }
-}

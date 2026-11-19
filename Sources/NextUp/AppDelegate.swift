@@ -64,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 }
 
-/// What the menu bar shows: a bell with the unseen Slack count, then the next meeting's countdown.
+/// What the menu bar shows: a bell with the unseen Slack and Teams count, then the next meeting's countdown.
 struct StatusLabel {
     static let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
 
@@ -83,7 +83,7 @@ struct StatusLabel {
         var tips: [String] = []
         if count > 0 {
             parts.append(count > 99 ? "99+" : "\(count)")
-            tips.append("\(count) new Slack notification\(count == 1 ? "" : "s")")
+            tips.append("\(count) new message\(count == 1 ? "" : "s") in Slack or Teams")
         }
 
         var countdown: (text: String, color: NSColor?)?
